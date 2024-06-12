@@ -15,6 +15,10 @@ Girdiler:
 
 Çıktı:
 
-- Bölümde gerçekleştirilen çalışmaların liste yapısında HTML kodu.
+- Bölümde gerçekleştirilen çalışmaların liste yapısında HTML kodu. Örnek HTML Görseli:
+
+
+<img src="output_example.png" alt="HTML Output example" width="720">
+
 
 Projenin HTML kodunun stil tasarımında destek olan [Abdullah Öğük](https://github.com/abdullahoguk)'e teşekkür ederim.
