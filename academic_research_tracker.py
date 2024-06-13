@@ -164,6 +164,8 @@ class Studies:
                     pass
 
             time.sleep(self.delay)
+            
+            self.articles = sorted(self.articles, key=lambda x: x['year'], reverse=True)
 
         else:
             # Print an error message if the request was not successful
@@ -223,8 +225,10 @@ if __name__ == "__main__":
         studies.find_academic_links()
 
         print("\nFinding articles for academics;\n")
+        
         for i in range(len(studies.academic_links)):
             studies.find_article_links(studies.academic_links[i])    
+        
         studies.session.close()
         
         html = studies.build_html()
