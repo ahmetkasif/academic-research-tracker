@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 import time
 import argparse
+import re
 
 class Studies:
     def __init__(self, university_name, faculty_name, department_name, min_year, exc_delay):
@@ -109,68 +110,82 @@ class Studies:
             print('Error: Could not access DEPT-LINK')
 
     def find_article_links(self, academic):
-        print("Searching articles for", academic['name'], ", link:", self.yok_link + academic['link'])
-        # Go to the home page of yok.akademik.gov.tr
         response = self.session.get(self.yok_link + academic['link'])
-        articles_link = ""
-        
-        # Check if the request was successful
-        if response.status_code == 200:
-
-            # Create a BeautifulSoup object from the response
-            soup = BeautifulSoup(response.content, 'html.parser')
-
-            # Find all the links to academicians
-            articles_link = soup.select("li#articleMenu a")[0]['href']
-            time.sleep(self.delay)
-            
-        else:
-            # Print an error message if the request was not successful
+        if response.status_code != 200:
             print('Error: Could not access ACADEMIC-LINK')
-        
+            return
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        article_tab = soup.select_one("li#articleMenu a")
+        if not article_tab:
+            print("No article tab found for", academic['name'])
+            return
+
+        articles_link = article_tab['href']
+        time.sleep(self.delay)
+
         response = self.session.get(self.yok_link + articles_link)
-        
-        # Check if the request was successful
-        if response.status_code == 200:
-            # Create a BeautifulSoup object from the response
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Find all the links to academicians
-            articles = soup.select("div#all table tbody.searchable tr > td")
-            for i in range(1, len(articles), 4):
-                year = articles[i].text.split(',')
-                year = year[len(year)-1].split("\n")[0]
-                
-                try:
-                    if int(year) >= self.min_year:
-                        title = articles[i].select("span strong a")[0].text.upper()
-                        
-                        authors = articles[i].select("a#popoverData")
-                        for k in range(len(authors)):
-                            authors[k] = authors[k].text
-                        
-                        #print(int(i/4), "Title:", title, ", Year: ", year, ", authors:", authors)
-                        
-                        article = {
-                            "year": year,
-                            "title": title,
-                            "authors": authors
-                        }
-                        self.articles.append(article)
-                        #print(int(i/4), article)
-                    #else:
-                        #print("old article, year:", year)
-                except Exception:
-                    pass
-
-            time.sleep(self.delay)
-            
-            self.articles = sorted(self.articles, key=lambda x: x['year'], reverse=True)
-
-        else:
-            # Print an error message if the request was not successful
+        if response.status_code != 200:
             print('Error: Could not access ARTICLE-LINKS')
-        
+            return
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        articles = soup.select("div#all table tbody.searchable tr > td")
+
+        for i in range(1, len(articles), 4):
+            try:
+                year_parts = articles[i].text.split(',')
+                raw_year = year_parts[-1].split("\n")[0].strip()
+                if not raw_year.isdigit() or not (1900 <= int(raw_year) <= 2100):
+                    continue
+                year = int(raw_year)
+                if year < self.min_year:
+                    continue
+
+
+                title_tag = articles[i].select_one("span strong a")
+                if not title_tag or not title_tag.text.strip():
+                    continue
+                title = title_tag.text.strip().upper()
+
+
+                cell_html = str(articles[i])
+                soup_authors = BeautifulSoup(cell_html, 'html.parser')
+
+                a_tag_authors = [a.get_text(strip=True) for a in soup_authors.find_all('a', class_='popoverData')]
+
+
+                full_text = soup_authors.get_text(separator=" ", strip=True)
+                authors_and_meta = full_text.split(', Yayın Yeri')[0] if ', Yayın Yeri' in full_text else full_text
+
+                raw_names = [x.strip() for x in re.split(r',|;', authors_and_meta) if x.strip()]
+                filtered_names = []
+                for name in raw_names:
+                    if not any(w in name for w in ["Yayın Yeri", "Hakemli", "SCI", "Makale", "https", "doi", "Index", "Expanded"]):
+                        if 2 <= len(name.split()) <= 4 and all(c.isalpha() or c.isspace() for c in name):
+                            filtered_names.append(name)
+
+                all_authors = list(dict.fromkeys(a_tag_authors + filtered_names))
+
+                self.articles.append({
+                    "year": str(year),
+                    "title": title,
+                    "authors": all_authors
+                })
+
+            except Exception as e:
+                print("Hata:", e)
+                continue
+
+        time.sleep(self.delay)
+        self.articles = sorted(self.articles, key=lambda x: x['year'], reverse=True)
+        unique_articles = {}
+
+        for art in self.articles:
+            unique_articles[art['title']] = art  # Aynı başlık varsa en sonuncusu kalır
+
+        self.articles = sorted(unique_articles.values(), key=lambda x: x['year'], reverse=True)
+
     def find_project_links(self, academic):
         print("(Not implemented) Searching projects for", academic['name'])
         # Go to the home page of yok.akademik.gov.tr
@@ -187,16 +202,130 @@ class Studies:
         return result
 
     def build_html(self):
-        html = "<html><head<meta name='author' content='ahmetkasif'></head><body>"
-        css = "<style>.article{ display: flex!important; background: #eee; margin-bottom: 1em; padding: 1em; list-style: none; border-radius: 10px; margin-left: -1.5em; font-size: .8em; flex-direction: row; flex-wrap: wrap; align-items: flex-start; line-height: 1.1 } .article > *{ } .article > .title{ font-weight: 700; flex-basis: 80%; flex-grow: 1; } .article > .authors{ font-size:  .8em; color: #320057; width: 100%; } .article > .year{ background: #320057; color: white; padding: 5px; border-radius: 10px; font-size: .8em; line-height: 1; }</style>"
-        
+        all_years = sorted({int(article["year"]) for article in self.articles if article["year"].isdigit()})
+        min_year = 2022
+        max_year = max(all_years) if all_years else 2025
+        year_options = [y for y in range(min_year, max_year + 1)]
+
+        html = """
+        <html>
+        <head>
+            <meta charset='UTF-8'>
+            <meta name='author' content='ahmetkasif'>
+            <style>
+                body {
+                    font-family: sans-serif;
+                    padding: 2em;
+                    background: #fdfdfd;
+                }
+                .filters {
+                    display: flex;
+                    justify-content: space-between;
+                    margin-bottom: 1em;
+                    flex-wrap: wrap;
+                    gap: 1em;
+                }
+                .filter-group {
+                    display: flex;
+                    align-items: center;
+                    gap: 0.5em;
+                }
+                label {
+                    font-weight: bold;
+                    font-size: 0.9em;
+                }
+                input[type="text"], select {
+                    padding: 0.5em;
+                    border: 1px solid #ccc;
+                    border-radius: 5px;
+                    font-size: 1em;
+                }
+                ul {
+                    padding-left: 0;
+                }
+                .article {
+                    display: flex;
+                    background: #eee;
+                    margin-bottom: 1em;
+                    padding: 1em;
+                    list-style: none;
+                    border-radius: 10px;
+                    font-size: .9em;
+                    flex-direction: row;
+                    flex-wrap: wrap;
+                    align-items: flex-start;
+                    line-height: 1.3;
+                }
+                .article > .title {
+                    font-weight: 700;
+                    flex-basis: 80%;
+                    flex-grow: 1;
+                }
+                .article > .authors {
+                    font-size:  .8em;
+                    color: #320057;
+                    width: 100%;
+                }
+                .article > .year {
+                    background: #320057;
+                    color: white;
+                    padding: 5px;
+                    border-radius: 10px;
+                    font-size: .8em;
+                    line-height: 1;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="filters">
+                <div class="filter-group">
+                    <label for="searchBox">Ara</label>
+                    <input type="text" id="searchBox" placeholder="Makale Ara...">
+                </div>
+                <div class="filter-group">
+                    <label for="yearFilter">Yıllara Göre Filtrele</label>
+                    <select id="yearFilter">
+                        <option value="all">Tüm Yıllar</option>"""
+        for y in year_options:
+            html += f'<option value="{y}">{y} ve sonrası</option>'
+        html += """</select>
+                </div>
+            </div>
+            <ul id="articleList">"""
+
         for article in self.articles:
-            print("\n", article['title'], ", ", article['year'], ", ", article['authors'])
+            html += f"""
+            <li class='article' data-title='{article['title']}' data-year='{article['year']}'>
+                <span class='title'>{article['title']}</span>
+                <span class='year'>{article['year']}</span>
+                <span class='authors'>{', '.join(article['authors'])}</span>
+            </li>"""
 
-        result = "".join(map(self.build_art, self.articles))
+        html += """</ul>
+        <script>
+            const searchBox = document.getElementById('searchBox');
+            const yearFilter = document.getElementById('yearFilter');
+            const articles = document.querySelectorAll('.article');
 
-        html += result + css + "</body></html>"
-        print("\n Final HTML:\n")
+            function filterArticles() {
+                const query = searchBox.value.toLowerCase();
+                const selectedYear = yearFilter.value;
+
+                articles.forEach(article => {
+                    const title = article.dataset.title.toLowerCase();
+                    const year = parseInt(article.dataset.year);
+                    const matchTitle = title.includes(query);
+                    const matchYear = (selectedYear === "all") || (year >= parseInt(selectedYear));
+                    article.style.display = (matchTitle && matchYear) ? "flex" : "none";
+                });
+            }
+
+            searchBox.addEventListener("input", filterArticles);
+            yearFilter.addEventListener("change", filterArticles);
+        </script>
+        </body>
+        </html>
+        """
         return html
 
 if __name__ == "__main__":
